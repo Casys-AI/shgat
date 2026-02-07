@@ -1,24 +1,17 @@
-name: Publish to JSR
+name: Publish
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+    branches:
+      - main
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write  # Required for JSR provenance
-
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-
-      - name: Publish to JSR
-        run: deno publish
+      - uses: actions/checkout@v5
+      - name: Publish package
+        run: npx jsr publish
