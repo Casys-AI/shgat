@@ -84,7 +84,7 @@ Deno.test("AutogradTrainer - score returns array", () => {
   trainer.dispose();
 });
 
-Deno.test("AutogradTrainer - trainBatch returns metrics", () => {
+Deno.test("AutogradTrainer - trainBatch returns metrics", async () => {
   const trainer = new AutogradTrainer(DEFAULT_SHGAT_CONFIG);
   const embeddings = createTestEmbeddings(5);
   trainer.setNodeEmbeddings(embeddings);
@@ -94,7 +94,7 @@ Deno.test("AutogradTrainer - trainBatch returns metrics", () => {
     createTrainingExample("node-1", ["node-0", "node-3"]),
   ];
 
-  const metrics = trainer.trainBatch(examples);
+  const metrics = await trainer.trainBatch(examples);
 
   assertExists(metrics);
   assertEquals(typeof metrics.loss, "number");
@@ -106,7 +106,7 @@ Deno.test("AutogradTrainer - trainBatch returns metrics", () => {
   trainer.dispose();
 });
 
-Deno.test("AutogradTrainer - multiple train steps reduce loss", () => {
+Deno.test("AutogradTrainer - multiple train steps reduce loss", async () => {
   const trainer = new AutogradTrainer({
     ...DEFAULT_SHGAT_CONFIG,
   }, { learningRate: 0.01 });
@@ -120,7 +120,7 @@ Deno.test("AutogradTrainer - multiple train steps reduce loss", () => {
   // Train multiple steps
   const losses: number[] = [];
   for (let i = 0; i < 10; i++) {
-    const metrics = trainer.trainBatch(examples);
+    const metrics = await trainer.trainBatch(examples);
     losses.push(metrics.loss);
   }
 

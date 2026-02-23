@@ -2,16 +2,13 @@
  * SHGAT Layers Trainer
  *
  * Training with tf.layers.* and model.trainOnBatch() for proper gradient tracking.
- * Uses custom FFI kernel for UnsortedSegmentSum to enable gather gradients on WASM.
  *
  * Pattern from lib/gru/src/transition/gru-model.ts
  *
  * @module shgat-tf/training/layers-trainer
  */
 
-import * as tf from "npm:@tensorflow/tfjs@4.22.0";
-import "npm:@tensorflow/tfjs-backend-wasm@4.22.0";
-import { registerUnsortedSegmentSumKernel } from "../tf/kernels/unsorted-segment-sum.ts";
+import { tf } from "../tf/backend.ts";
 import type { SHGATConfig, TrainingExample } from "../core/types.ts";
 
 // ============================================================================
@@ -399,17 +396,13 @@ export class LayersTrainer {
 let initialized = false;
 
 /**
- * Initialize TensorFlow with WASM backend and custom FFI kernel
+ * Initialize TensorFlow backend for layers trainer
  */
 export async function initLayersTrainer(): Promise<string> {
   if (initialized) return tf.getBackend();
 
-  // Set WASM backend
-  await tf.setBackend("wasm");
+  // Use backend from backend.ts (already initialized)
   await tf.ready();
-
-  // Register custom kernel for UnsortedSegmentSum
-  registerUnsortedSegmentSumKernel();
 
   initialized = true;
   const backend = tf.getBackend();

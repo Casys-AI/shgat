@@ -1,17 +1,17 @@
 /**
  * Vertex → Vertex Message Passing Phase (V→V)
  *
- * Pre-phase for SHGAT: Tools send messages to other tools based on
+ * Pre-phase for SHGAT: L0 nodes send messages to other L0 nodes based on
  * co-occurrence patterns from scraped n8n workflows.
  *
- * This phase enriches tool embeddings with structural information
+ * This phase enriches L0 node embeddings with structural information
  * from real-world workflow usage patterns BEFORE the V→E phase.
  *
  * Algorithm (simplified, no projection - keeps 1024d):
  *   1. Compute attention scores: score(i,j) = H_i · H_j (cosine similarity)
- *      (masked by co-occurrence matrix: only compute for co-occurring tools)
+ *      (masked by co-occurrence matrix: only compute for co-occurring L0 nodes)
  *   2. Weight by co-occurrence frequency: score'(i,j) = score(i,j) * A_cooc[i][j]
- *   3. Normalize per tool: α_i = softmax({score'(i,j) | j co-occurs with i})
+ *   3. Normalize per L0 node: α_i = softmax({score'(i,j) | j co-occurs with i})
  *   4. Aggregate: H'_i = H_i + β · Σ_j α_ij · H_j  (residual connection)
  *
  * @module graphrag/algorithms/shgat/message-passing/vertex-to-vertex-phase
@@ -24,9 +24,9 @@ import * as math from "../utils/math.ts";
  * Sparse representation for efficiency
  */
 export interface CooccurrenceEntry {
-  /** Source tool index */
+  /** Source L0 node index */
   from: number;
-  /** Target tool index */
+  /** Target L0 node index */
   to: number;
   /** Co-occurrence weight (frequency-based, normalized) */
   weight: number;
@@ -57,7 +57,7 @@ export const DEFAULT_V2V_CONFIG: VertexToVertexConfig = {
  * V→V phase result
  */
 export interface VertexToVertexResult {
-  /** Enriched embeddings [numTools][embeddingDim] */
+  /** Enriched embeddings [numL0][embeddingDim] */
   embeddings: number[][];
   /** Attention weights (sparse) for debugging */
   attentionWeights: CooccurrenceEntry[];
@@ -91,16 +91,16 @@ export const DEFAULT_V2V_PARAMS: V2VParams = {
  * Cache for V→V backward pass
  */
 export interface V2VForwardCache {
-  /** Original embeddings [numTools][embDim] */
+  /** Original embeddings [numL0][embDim] */
   H: number[][];
-  /** Aggregated neighbor embeddings [numTools][embDim] */
+  /** Aggregated neighbor embeddings [numL0][embDim] */
   aggregated: number[][];
-  /** Attention weights per tool: tool_idx → [neighbor weights] */
-  attentionPerTool: Map<number, number[]>;
-  /** Neighbors per tool: tool_idx → [neighbor indices] */
-  neighborsPerTool: Map<number, number[]>;
-  /** Pre-softmax scores per tool: tool_idx → [scores] */
-  scoresPerTool: Map<number, number[]>;
+  /** Attention weights per L0 node: node_idx → [neighbor weights] */
+  attentionPerVertex: Map<number, number[]>;
+  /** Neighbors per L0 node: node_idx → [neighbor indices] */
+  neighborsPerVertex: Map<number, number[]>;
+  /** Pre-softmax scores per L0 node: node_idx → [scores] */
+  scoresPerVertex: Map<number, number[]>;
   /** Pre-normalization enriched embeddings (before L2 norm) */
   enrichedPreNorm: number[][];
   /** L2 norms of enriched embeddings */
@@ -119,7 +119,7 @@ export interface V2VGradients {
   dResidualLogit: number;
   /** Gradient for temperatureLogit */
   dTemperatureLogit: number;
-  /** Gradient for input H [numTools][embDim] */
+  /** Gradient for input H [numL0][embDim] */
   dH: number[][];
 }
 
@@ -133,7 +133,7 @@ export interface V2VPhaseResultWithCache extends VertexToVertexResult {
 /**
  * Vertex → Vertex message passing implementation
  *
- * Enriches tool embeddings with co-occurrence information from
+ * Enriches L0 node embeddings with co-occurrence information from
  * scraped workflow patterns. Operates on full 1024d embeddings
  * without projection.
  */
@@ -151,9 +151,9 @@ export class VertexToVertexPhase {
   /**
    * Execute V→V message passing
    *
-   * @param H - Tool embeddings [numTools][embeddingDim] (1024d)
+   * @param H - L0 node embeddings [numL0][embeddingDim] (1024d)
    * @param cooccurrence - Sparse co-occurrence matrix entries
-   * @param toolIds - Tool ID to index mapping for debugging
+   * @param _toolIds - L0 node ID to index mapping for debugging
    * @returns Enriched embeddings and attention weights
    */
   forward(
@@ -161,8 +161,8 @@ export class VertexToVertexPhase {
     cooccurrence: CooccurrenceEntry[],
     _toolIds?: string[],
   ): VertexToVertexResult {
-    const numTools = H.length;
-    if (numTools === 0) {
+    const numL0 = H.length;
+    if (numL0 === 0) {
       return { embeddings: [], attentionWeights: [] };
     }
 
@@ -171,7 +171,7 @@ export class VertexToVertexPhase {
     // Build adjacency list from sparse co-occurrence
     const neighbors: Map<number, { idx: number; weight: number }[]> = new Map();
     for (const entry of cooccurrence) {
-      if (entry.from >= numTools || entry.to >= numTools) continue;
+      if (entry.from >= numL0 || entry.to >= numL0) continue;
 
       if (!neighbors.has(entry.from)) {
         neighbors.set(entry.from, []);
@@ -183,11 +183,11 @@ export class VertexToVertexPhase {
     const H_enriched: number[][] = [];
     const attentionWeights: CooccurrenceEntry[] = [];
 
-    for (let i = 0; i < numTools; i++) {
+    for (let i = 0; i < numL0; i++) {
       const neighborList = neighbors.get(i);
 
       if (!neighborList || neighborList.length === 0) {
-        // No co-occurring tools, keep original embedding
+        // No co-occurring L0 nodes, keep original embedding
         H_enriched.push([...H[i]]);
         continue;
       }
@@ -277,7 +277,7 @@ export class VertexToVertexPhase {
    * Uses V2VParams instead of config for residualWeight and temperature.
    * This allows these parameters to be trained via gradient descent.
    *
-   * @param H - Tool embeddings [numTools][embDim]
+   * @param H - L0 node embeddings [numL0][embDim]
    * @param cooccurrence - Sparse co-occurrence entries
    * @param params - Learnable parameters (residualLogit, temperatureLogit)
    * @returns Enriched embeddings and cache for backward
@@ -287,17 +287,17 @@ export class VertexToVertexPhase {
     cooccurrence: CooccurrenceEntry[],
     params: V2VParams,
   ): V2VPhaseResultWithCache {
-    const numTools = H.length;
-    if (numTools === 0) {
+    const numL0 = H.length;
+    if (numL0 === 0) {
       return {
         embeddings: [],
         attentionWeights: [],
         cache: {
           H: [],
           aggregated: [],
-          attentionPerTool: new Map(),
-          neighborsPerTool: new Map(),
-          scoresPerTool: new Map(),
+          attentionPerVertex: new Map(),
+          neighborsPerVertex: new Map(),
+          scoresPerVertex: new Map(),
           enrichedPreNorm: [],
           enrichedNorms: [],
           residualWeight: 0,
@@ -315,7 +315,7 @@ export class VertexToVertexPhase {
     // Build adjacency list
     const neighbors: Map<number, { idx: number; weight: number }[]> = new Map();
     for (const entry of cooccurrence) {
-      if (entry.from >= numTools || entry.to >= numTools) continue;
+      if (entry.from >= numL0 || entry.to >= numL0) continue;
       if (!neighbors.has(entry.from)) {
         neighbors.set(entry.from, []);
       }
@@ -324,15 +324,15 @@ export class VertexToVertexPhase {
 
     // Cache structures
     const aggregatedAll: number[][] = [];
-    const attentionPerTool = new Map<number, number[]>();
-    const neighborsPerTool = new Map<number, number[]>();
-    const scoresPerTool = new Map<number, number[]>();
+    const attentionPerVertex = new Map<number, number[]>();
+    const neighborsPerVertex = new Map<number, number[]>();
+    const scoresPerVertex = new Map<number, number[]>();
     const enrichedPreNorm: number[][] = [];
     const enrichedNorms: number[] = [];
     const H_enriched: number[][] = [];
     const attentionWeights: CooccurrenceEntry[] = [];
 
-    for (let i = 0; i < numTools; i++) {
+    for (let i = 0; i < numL0; i++) {
       const neighborList = neighbors.get(i);
 
       if (!neighborList || neighborList.length === 0) {
@@ -345,7 +345,7 @@ export class VertexToVertexPhase {
       }
 
       // Store neighbor indices
-      neighborsPerTool.set(i, neighborList.map((n) => n.idx));
+      neighborsPerVertex.set(i, neighborList.map((n) => n.idx));
 
       // Compute attention scores
       const scores: number[] = [];
@@ -353,11 +353,11 @@ export class VertexToVertexPhase {
         const sim = math.cosineSimilarity(H[i], H[neighbor.idx]);
         scores.push((sim * neighbor.weight) / temperature);
       }
-      scoresPerTool.set(i, scores);
+      scoresPerVertex.set(i, scores);
 
       // Softmax
       const attention = math.softmax(scores);
-      attentionPerTool.set(i, attention);
+      attentionPerVertex.set(i, attention);
 
       // Weighted sum of neighbor embeddings
       const aggregated = Array(embeddingDim).fill(0);
@@ -401,9 +401,9 @@ export class VertexToVertexPhase {
     const cache: V2VForwardCache = {
       H: H.map((row) => [...row]),
       aggregated: aggregatedAll,
-      attentionPerTool,
-      neighborsPerTool,
-      scoresPerTool,
+      attentionPerVertex,
+      neighborsPerVertex,
+      scoresPerVertex,
       enrichedPreNorm,
       enrichedNorms,
       residualWeight,
@@ -416,7 +416,7 @@ export class VertexToVertexPhase {
   /**
    * Backward pass: compute gradients for learnable parameters
    *
-   * @param dH_enriched - Gradient from downstream [numTools][embDim]
+   * @param dH_enriched - Gradient from downstream [numL0][embDim]
    * @param cache - Forward pass cache
    * @param params - Learnable parameters (for chain rule)
    * @returns Gradients for residualLogit, temperatureLogit, and input H
@@ -426,17 +426,27 @@ export class VertexToVertexPhase {
     cache: V2VForwardCache,
     _params: V2VParams,
   ): V2VGradients {
-    const { H, aggregated, attentionPerTool, neighborsPerTool, scoresPerTool, enrichedPreNorm, enrichedNorms, residualWeight, temperature } = cache;
-    const numTools = H.length;
+    const {
+      H,
+      aggregated,
+      attentionPerVertex,
+      neighborsPerVertex,
+      scoresPerVertex,
+      enrichedPreNorm,
+      enrichedNorms,
+      residualWeight,
+      temperature,
+    } = cache;
+    const numL0 = H.length;
     const embeddingDim = H[0]?.length ?? 0;
 
     // Initialize gradients
     let dResidualLogit = 0;
     let dTemperatureLogit = 0;
-    const dH: number[][] = Array.from({ length: numTools }, () => Array(embeddingDim).fill(0));
+    const dH: number[][] = Array.from({ length: numL0 }, () => Array(embeddingDim).fill(0));
 
-    for (let i = 0; i < numTools; i++) {
-      const neighborIndices = neighborsPerTool.get(i);
+    for (let i = 0; i < numL0; i++) {
+      const neighborIndices = neighborsPerVertex.get(i);
 
       if (!neighborIndices || neighborIndices.length === 0) {
         // No neighbors: gradient passes through directly
@@ -504,7 +514,7 @@ export class VertexToVertexPhase {
       // aggregated = Σ attention[n] * H[neighbor]
       // dAttention[n] = dot(dAggregated, H[neighbor])
       // dH[neighbor] += attention[n] * dAggregated
-      const attention = attentionPerTool.get(i)!;
+      const attention = attentionPerVertex.get(i)!;
       const dAttention = Array(neighborIndices.length).fill(0);
 
       for (let n = 0; n < neighborIndices.length; n++) {
@@ -531,7 +541,7 @@ export class VertexToVertexPhase {
       // Step 5: Through score computation
       // score[n] = (cosineSim * coocWeight) / temperature
       // dTemperature += dScore[n] * (-score[n] / temperature)
-      const scores = scoresPerTool.get(i)!;
+      const scores = scoresPerVertex.get(i)!;
       for (let n = 0; n < neighborIndices.length; n++) {
         // dTemperature contribution: d(x/T)/dT = -x/T^2 = -score/T
         const dTemp = dScore[n] * (-scores[n] / temperature);
@@ -597,4 +607,101 @@ export function buildCooccurrenceMatrix(
   }
 
   return entries;
+}
+
+// ============================================================================
+// Clean DX: High-level API
+// ============================================================================
+
+/**
+ * Build sparse co-occurrence matrix from workflow tool lists.
+ *
+ * Each workflow is a list of tool IDs that co-occur. Any two tools in the
+ * same workflow get a co-occurrence edge, weighted by the number of shared
+ * workflows (log-normalized).
+ *
+ * @example
+ * ```ts
+ * const workflows = [
+ *   ["github_create_issue", "slack_send_message", "jira_create_ticket"],
+ *   ["slack_send_message", "email_send"],
+ * ];
+ * const entries = buildCooccurrenceFromWorkflows(workflows, toolIdToIdx);
+ * ```
+ *
+ * @param workflowToolLists - Array of tool ID arrays (one per workflow)
+ * @param toolIndex - Map from tool ID to numeric index
+ * @returns Sparse bidirectional co-occurrence entries
+ */
+export function buildCooccurrenceFromWorkflows(
+  workflowToolLists: string[][],
+  toolIndex: Map<string, number>,
+): CooccurrenceEntry[] {
+  // Count pairwise co-occurrences
+  const pairCount = new Map<string, number>();
+
+  for (const tools of workflowToolLists) {
+    // Resolve indices, skip unknown tools
+    const indices: number[] = [];
+    for (const toolId of tools) {
+      const idx = toolIndex.get(toolId);
+      if (idx !== undefined) indices.push(idx);
+    }
+
+    // All pairs within this workflow
+    for (let i = 0; i < indices.length; i++) {
+      for (let j = i + 1; j < indices.length; j++) {
+        const a = Math.min(indices[i], indices[j]);
+        const b = Math.max(indices[i], indices[j]);
+        const key = `${a}:${b}`;
+        pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
+      }
+    }
+  }
+
+  // Convert to sparse entries with log-normalized weights
+  const entries: CooccurrenceEntry[] = [];
+  for (const [key, count] of pairCount) {
+    const [aStr, bStr] = key.split(":");
+    const a = parseInt(aStr, 10);
+    const b = parseInt(bStr, 10);
+
+    // Log-normalize: weight = log2(1 + count) — diminishing returns for high counts
+    const weight = Math.log2(1 + count);
+
+    // Bidirectional
+    entries.push({ from: a, to: b, weight });
+    entries.push({ from: b, to: a, weight });
+  }
+
+  return entries;
+}
+
+/**
+ * One-shot V→V enrichment — the simplest API for embedding enrichment.
+ *
+ * Takes raw L0 node embeddings + co-occurrence, returns enriched embeddings.
+ * No class instantiation, no cache, no learnable params needed.
+ *
+ * @example
+ * ```ts
+ * import { v2vEnrich, buildCooccurrenceFromWorkflows } from "shgat-tf";
+ *
+ * const cooc = buildCooccurrenceFromWorkflows(workflowToolLists, toolIdToIdx);
+ * const enriched = v2vEnrich(rawEmbeddings, cooc);
+ * // enriched[i] is the V→V-enriched embedding for L0 node i
+ * ```
+ *
+ * @param H - Raw L0 node embeddings [numL0][embDim]
+ * @param cooccurrence - Sparse co-occurrence entries (from buildCooccurrenceFromWorkflows)
+ * @param config - Optional config (defaults: residualWeight=0.3, temperature=1.0, useAttention=true)
+ * @returns Enriched embeddings [numL0][embDim]
+ */
+export function v2vEnrich(
+  H: number[][],
+  cooccurrence: CooccurrenceEntry[],
+  config?: Partial<VertexToVertexConfig>,
+): number[][] {
+  const phase = new VertexToVertexPhase(config);
+  return phase.forward(H, cooccurrence).embeddings;
 }

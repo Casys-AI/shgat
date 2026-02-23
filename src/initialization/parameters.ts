@@ -33,7 +33,7 @@ let rngState = Date.now(); // Default: use current time (non-reproducible)
  * ```typescript
  * import { seedRng } from "./shgat/initialization/parameters.ts";
  * seedRng(42); // Set seed for reproducibility
- * const shgat = createSHGATFromCapabilities(caps);
+ * const shgat = createSHGAT(nodes);
  * ```
  */
 export function seedRng(seed: number): void {
@@ -88,8 +88,9 @@ export interface HeadParams {
   a: number[];
 }
 
-// Import TensorFlow types (must use same package as backend.ts)
-import type { Variable } from "npm:@tensorflow/tfjs@4.22.0";
+// Import TensorFlow via centralized backend (single source of truth for tf)
+import { tf } from "../tf/backend.ts";
+type Variable = tf.Variable;
 
 /**
  * Per-head attention parameters (tensor-based, for GPU-accelerated scoring)
@@ -245,6 +246,10 @@ export function initTensor3DIdentityLike(
  * values too small for Q·K to escape sigmoid(0) = 0.5.
  *
  * @param scaleFactor Multiplier for Xavier scale (default 10 for K-head)
+ *
+ * @deprecated Prefer initOrthogonalMatrix() for K-head projections.
+ * Random orthogonal projections provide stronger JL guarantees
+ * for distance preservation without training. See ADR 2026-02-08.
  */
 export function initMatrixScaled(rows: number, cols: number, scaleFactor: number = 10): number[][] {
   const scale = Math.sqrt(2.0 / (rows + cols)) * scaleFactor;
@@ -252,6 +257,73 @@ export function initMatrixScaled(rows: number, cols: number, scaleFactor: number
     { length: rows },
     () => Array.from({ length: cols }, () => (random() - 0.5) * 2 * scale),
   );
+}
+
+/**
+ * Generate a Gaussian random number using Box-Muller transform.
+ * Uses the seeded PRNG for reproducibility.
+ */
+function gaussianRandom(): number {
+  const u1 = random() || 1e-10; // Avoid log(0)
+  const u2 = random();
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+/**
+ * Initialize 2D matrix with random orthogonal rows (QR via Gram-Schmidt).
+ *
+ * For K-head scoring projections (rows << cols, e.g. 64×1024),
+ * orthogonal rows provide the strongest Johnson-Lindenstrauss guarantee:
+ * pairwise cosine similarities are preserved with variance <= 1/(2*rows).
+ *
+ * Algorithm:
+ * 1. Generate random Gaussian matrix [rows × cols]
+ * 2. Orthogonalize rows via modified Gram-Schmidt
+ * 3. Normalize each row to unit length (× sqrt(cols/rows) for energy preservation)
+ *
+ * References:
+ * - Dasgupta & Gupta (2003), "An elementary proof of a theorem of Johnson and Lindenstrauss"
+ * - Ailon & Chazelle (2009), "The Fast Johnson-Lindenstrauss Transform"
+ *
+ * @param rows Number of output dimensions (e.g. headDim=64)
+ * @param cols Number of input dimensions (e.g. embeddingDim=1024)
+ * @returns Orthogonal matrix [rows × cols] with energy-preserving scaling
+ */
+export function initOrthogonalMatrix(rows: number, cols: number): number[][] {
+  // Step 1: Generate random Gaussian matrix
+  const M: number[][] = Array.from({ length: rows },
+    () => Array.from({ length: cols }, () => gaussianRandom())
+  );
+
+  // Step 2: Modified Gram-Schmidt orthogonalization (on rows)
+  for (let i = 0; i < rows; i++) {
+    // Subtract projections of all previous rows
+    for (let j = 0; j < i; j++) {
+      // dot(M[i], M[j])
+      let dot = 0;
+      for (let k = 0; k < cols; k++) dot += M[i][k] * M[j][k];
+      // M[i] -= dot * M[j]
+      for (let k = 0; k < cols; k++) M[i][k] -= dot * M[j][k];
+    }
+    // Normalize row i to unit length
+    let norm = 0;
+    for (let k = 0; k < cols; k++) norm += M[i][k] * M[i][k];
+    norm = Math.sqrt(norm);
+    if (norm > 1e-10) {
+      for (let k = 0; k < cols; k++) M[i][k] /= norm;
+    }
+  }
+
+  // Step 3: Scale for energy preservation
+  // A unit-norm orthogonal projection from R^cols to R^rows
+  // scales energies by rows/cols. Multiply by sqrt(cols/rows)
+  // so that E[||Px||^2] = ||x||^2 (unbiased length preservation).
+  const scale = Math.sqrt(cols / rows);
+  for (let i = 0; i < rows; i++) {
+    for (let k = 0; k < cols; k++) M[i][k] *= scale;
+  }
+
+  return M;
 }
 
 /**
@@ -318,7 +390,10 @@ export function initializeParameters(config: SHGATConfig): SHGATParams {
   const scoringDim = headDim; // 64 per head, NOT 1024 (fixes 16x oversized matrices)
   const headParams: HeadParams[] = [];
   for (let h = 0; h < numHeads; h++) {
-    const W_shared = initMatrixScaled(scoringDim, embeddingDim, 10);
+    // Random orthogonal projection (JL guarantee) instead of scaled Xavier.
+    // Preserves BGE-M3 cosine similarity structure without training.
+    // See ADR: docs/2026-02-08-no-training-decision.md
+    const W_shared = initOrthogonalMatrix(scoringDim, embeddingDim);
     headParams.push({
       W_q: W_shared,
       W_k: W_shared, // Same matrix as W_q - preserves similarity structure
@@ -781,14 +856,7 @@ export function countParameters(config: SHGATConfig): {
 // Tensor-Based Parameter Management (GPU-accelerated scoring)
 // ============================================================================
 
-// Dynamic import to avoid circular dependency with backend.ts
-let _tf: typeof import("npm:@tensorflow/tfjs@4.22.0") | null = null;
-async function getTf() {
-  if (!_tf) {
-    _tf = await import("npm:@tensorflow/tfjs@4.22.0");
-  }
-  return _tf;
-}
+// tf is imported at module level from backend.ts (single source of truth)
 
 /**
  * Create tensor-based scoring parameters from array-based params.
@@ -810,10 +878,9 @@ async function getTf() {
  * disposeTensorScoringParams(tensorParams);
  * ```
  */
-export async function createTensorScoringParams(
+export function createTensorScoringParams(
   params: SHGATParams,
-): Promise<TensorScoringParams> {
-  const tf = await getTf();
+): TensorScoringParams {
   const instanceId = tensorParamsCounter++;
 
   const headParams: TensorHeadParams[] = params.headParams.map((hp, i) => ({
@@ -844,10 +911,8 @@ export async function createTensorScoringParams(
 /**
  * Create tensor-based scoring parameters synchronously.
  *
- * Use this when TensorFlow.js is already loaded (e.g., after initTensorFlow()).
- *
  * @param params Array-based SHGAT parameters
- * @param tf TensorFlow.js module reference
+ * @param _tf Deprecated - tf is now imported from backend.ts. Parameter kept for backward compat.
  * @returns Tensor-based scoring parameters
  */
 // Counter for unique variable names across instances
@@ -855,7 +920,7 @@ let tensorParamsCounter = 0;
 
 export function createTensorScoringParamsSync(
   params: SHGATParams,
-  tf: typeof import("npm:@tensorflow/tfjs@4.22.0"),
+  _tf?: unknown,
 ): TensorScoringParams {
   const instanceId = tensorParamsCounter++;
 
@@ -914,12 +979,12 @@ export function disposeTensorScoringParams(tensorParams: TensorScoringParams): v
  *
  * @param tensorParams Tensor parameters to update
  * @param params Source array-based parameters
- * @param tf TensorFlow.js module reference
+ * @param _tf Deprecated - tf is now imported from backend.ts. Parameter kept for backward compat.
  */
 export function updateTensorScoringParams(
   tensorParams: TensorScoringParams,
   params: SHGATParams,
-  tf: typeof import("npm:@tensorflow/tfjs@4.22.0"),
+  _tf?: unknown,
 ): void {
   for (let i = 0; i < params.headParams.length; i++) {
     const hp = params.headParams[i];

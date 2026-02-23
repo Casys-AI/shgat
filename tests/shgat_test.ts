@@ -18,7 +18,7 @@ import {
   buildGraph,
   buildIncidenceMatrix,
   createSHGAT,
-  createSHGATFromCapabilities,
+  generateDefaultToolEmbedding,
   groupNodesByLevel,
   type Node,
   precomputeGraphStructure,
@@ -29,13 +29,35 @@ import {
 // Test Fixtures
 // =============================================================================
 
-function createTestCapabilities(count: number = 3) {
-  return Array.from({ length: count }, (_, i) => ({
-    id: `cap-${i + 1}`,
-    embedding: Array.from({ length: 1024 }, () => Math.random() * 0.1),
-    toolsUsed: [`tool-${i + 1}a`, `tool-${i + 1}b`],
-    successRate: 0.7 + Math.random() * 0.25,
-  }));
+/**
+ * Create test nodes for legacy test migration.
+ * Each "capability" becomes a composite node with 2 tool children.
+ */
+function createLegacyTestNodes(count: number = 3): Node[] {
+  const nodes: Node[] = [];
+  for (let i = 0; i < count; i++) {
+    // Tool nodes (leaves)
+    nodes.push({
+      id: `tool-${i + 1}a`,
+      embedding: generateDefaultToolEmbedding(`tool-${i + 1}a`, 1024),
+      children: [],
+      level: 0,
+    });
+    nodes.push({
+      id: `tool-${i + 1}b`,
+      embedding: generateDefaultToolEmbedding(`tool-${i + 1}b`, 1024),
+      children: [],
+      level: 0,
+    });
+    // Capability node (composite)
+    nodes.push({
+      id: `cap-${i + 1}`,
+      embedding: Array.from({ length: 1024 }, () => Math.random() * 0.1),
+      children: [`tool-${i + 1}a`, `tool-${i + 1}b`],
+      level: 0, // buildGraph will compute actual level
+    });
+  }
+  return nodes;
 }
 
 function createTestIntent() {
@@ -46,14 +68,14 @@ function createTestIntent() {
 // Initialization Tests
 // =============================================================================
 
-Deno.test("SHGAT - creates from capabilities", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+Deno.test("SHGAT - creates from nodes", () => {
+  const nodes = createLegacyTestNodes(3);
+  const shgat = createSHGAT(nodes);
   assertExists(shgat);
 });
 
-Deno.test("SHGAT - creates with empty capabilities", () => {
-  const shgat = createSHGATFromCapabilities([]);
+Deno.test("SHGAT - creates with empty nodes", () => {
+  const shgat = createSHGAT([]);
   assertExists(shgat);
 });
 
@@ -70,12 +92,12 @@ Deno.test("SHGAT - creates with custom config", () => {
 // Scoring Tests
 // =============================================================================
 
-Deno.test("SHGAT - scoreAllCapabilities returns sorted results", () => {
-  const caps = createTestCapabilities(5);
-  const shgat = createSHGATFromCapabilities(caps);
+Deno.test("SHGAT - scoreNodes returns sorted results for composites", () => {
+  const nodes = createLegacyTestNodes(5);
+  const shgat = createSHGAT(nodes);
   const intent = createTestIntent();
 
-  const results = shgat.scoreAllCapabilities(intent, []);
+  const results = shgat.scoreNodes(intent, 1); // composites only
 
   assertEquals(results.length, 5);
   // Check sorted descending
@@ -84,12 +106,12 @@ Deno.test("SHGAT - scoreAllCapabilities returns sorted results", () => {
   }
 });
 
-Deno.test("SHGAT - scoreAllCapabilities includes head scores", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+Deno.test("SHGAT - scoreNodes includes head scores", () => {
+  const nodes = createLegacyTestNodes(3);
+  const shgat = createSHGAT(nodes);
   const intent = createTestIntent();
 
-  const results = shgat.scoreAllCapabilities(intent, []);
+  const results = shgat.scoreNodes(intent, 1);
 
   for (const r of results) {
     assertExists(r.headScores);
@@ -97,29 +119,29 @@ Deno.test("SHGAT - scoreAllCapabilities includes head scores", () => {
   }
 });
 
-Deno.test("SHGAT - scoreAllCapabilities returns valid scores", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+Deno.test("SHGAT - scoreNodes returns valid scores", () => {
+  const nodes = createLegacyTestNodes(3);
+  const shgat = createSHGAT(nodes);
   const intent = createTestIntent();
 
-  const results = shgat.scoreAllCapabilities(intent, []);
-  const score = results.find(r => r.capabilityId === "cap-1")?.score ?? 0;
+  const results = shgat.scoreNodes(intent, 1);
+  const score = results.find(r => r.nodeId === "cap-1")?.score ?? 0;
 
   assertGreater(score, -1);
   assertLess(score, 2);
 });
 
-Deno.test("SHGAT - scores with context tools", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+Deno.test("SHGAT - scores all nodes", () => {
+  const nodes = createLegacyTestNodes(3);
+  const shgat = createSHGAT(nodes);
   const intent = createTestIntent();
 
-  const resultsNoContext = shgat.scoreAllCapabilities(intent, []);
-  const resultsWithContext = shgat.scoreAllCapabilities(intent, ["tool-1a"]);
+  const allResults = shgat.scoreNodes(intent);
+  const compositeResults = shgat.scoreNodes(intent, 1);
 
-  // Both should return results
-  assertEquals(resultsNoContext.length, 3);
-  assertEquals(resultsWithContext.length, 3);
+  // All results include tools + composites
+  assertGreater(allResults.length, compositeResults.length);
+  assertEquals(compositeResults.length, 3);
 });
 
 // =============================================================================
@@ -127,8 +149,8 @@ Deno.test("SHGAT - scores with context tools", () => {
 // =============================================================================
 
 Deno.test("SHGAT - forward returns embeddings", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+  const nodes = createLegacyTestNodes(3);
+  const shgat = createSHGAT(nodes);
 
   const { E, H } = shgat.forward();
 
@@ -139,8 +161,8 @@ Deno.test("SHGAT - forward returns embeddings", () => {
 });
 
 Deno.test("SHGAT - forward embeddings have correct dimension", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+  const nodes = createLegacyTestNodes(3);
+  const shgat = createSHGAT(nodes);
 
   const { E } = shgat.forward();
 
@@ -150,8 +172,8 @@ Deno.test("SHGAT - forward embeddings have correct dimension", () => {
 });
 
 Deno.test("SHGAT - forward embeddings are finite", () => {
-  const caps = createTestCapabilities(5);
-  const shgat = createSHGATFromCapabilities(caps);
+  const nodes = createLegacyTestNodes(5);
+  const shgat = createSHGAT(nodes);
 
   const { E, H } = shgat.forward();
 
@@ -171,37 +193,28 @@ Deno.test("SHGAT - forward embeddings are finite", () => {
 // Edge Cases
 // =============================================================================
 
-Deno.test("SHGAT - handles single capability", () => {
-  const caps = createTestCapabilities(1);
-  const shgat = createSHGATFromCapabilities(caps);
+Deno.test("SHGAT - handles single composite node", () => {
+  const nodes = createLegacyTestNodes(1);
+  const shgat = createSHGAT(nodes);
   const intent = createTestIntent();
 
-  const results = shgat.scoreAllCapabilities(intent, []);
+  const results = shgat.scoreNodes(intent, 1);
   assertEquals(results.length, 1);
 });
 
-Deno.test("SHGAT - handles capability with no tools", () => {
-  const caps = [{
+Deno.test("SHGAT - handles node with no children (leaf)", () => {
+  const nodes: Node[] = [{
     id: "cap-no-tools",
     embedding: Array.from({ length: 1024 }, () => Math.random()),
-    toolsUsed: [],
-    successRate: 0.8,
+    children: [],
+    level: 0,
   }];
-  const shgat = createSHGATFromCapabilities(caps);
+  const shgat = createSHGAT(nodes);
   const intent = createTestIntent();
 
-  const results = shgat.scoreAllCapabilities(intent, []);
+  // A leaf node scores at level 0
+  const results = shgat.scoreNodes(intent, 0);
   assertEquals(results.length, 1);
-});
-
-Deno.test("SHGAT - handles unknown tool in context", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
-  const intent = createTestIntent();
-
-  // Should not crash with unknown tool
-  const results = shgat.scoreAllCapabilities(intent, ["unknown-tool-xyz"]);
-  assertEquals(results.length, 3);
 });
 
 // =============================================================================

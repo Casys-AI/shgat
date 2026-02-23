@@ -1,75 +1,118 @@
 /**
- * SHGAT-TF - SuperHyperGraph Attention Networks with TensorFlow FFI
+ * SHGAT-TF - SuperHyperGraph Attention Networks with TensorFlow.js
  *
- * A TypeScript/Deno implementation of SuperHyperGraph Attention Networks using
- * libtensorflow via FFI for high-performance training and inference.
+ * A TypeScript implementation of SuperHyperGraph Attention Networks using
+ * TF.js dense autograd for training and inference.
+ *
+ * Backends:
+ * - Deno: WebGPU > WASM > CPU (see backend.ts)
+ * - Node.js: tfjs-node C++ binding (see backend.node.ts)
  *
  * Key features:
- * - libtensorflow FFI backend (native C performance, no WASM overhead)
+ * - Dense TF.js autograd for training (CPU/WebGPU backends)
  * - Two-phase message passing: Vertex→Hyperedge, Hyperedge→Vertex
- * - K-head attention (4-16 adaptive heads) with InfoNCE contrastive loss
+ * - K-head attention (16 heads) with InfoNCE contrastive loss
  * - Multi-level hierarchy support (n-SuperHyperGraph)
- * - Sparse message passing for large graphs (~10x training speedup)
  * - Prioritized Experience Replay (PER) for sample efficiency
- * - Automatic differentiation via TensorFlow autograd
  *
- * @example
+ * @example Recommended: Builder API (training + inference)
  * ```typescript
- * import { createSHGATFromCapabilities, type TrainingExample } from "@casys/shgat";
+ * import { SHGATBuilder } from "@casys/shgat-tf";
  *
- * // Create SHGAT from capability definitions
- * const shgat = createSHGATFromCapabilities(capabilities);
+ * const nodes = [
+ *   { id: "tool-a", embedding: toolAEmb, children: [] },
+ *   { id: "tool-b", embedding: toolBEmb, children: [] },
+ *   { id: "cap-1",  embedding: capEmb,   children: ["tool-a", "tool-b"] },
+ * ];
  *
- * // Score capabilities for an intent
- * const intentEmbedding = new Array(1024).fill(0).map(() => Math.random());
- * const scores = shgat.scoreAllCapabilities(intentEmbedding, ["tool-a"]);
- * console.log(scores[0]); // { capabilityId: "cap-1", score: 0.73 }
+ * const shgat = await SHGATBuilder.create()
+ *   .nodes(nodes)
+ *   .training({ learningRate: 0.05, temperature: 0.10 })
+ *   .build();
  *
- * // Train with K-head attention
- * const result = shgat.trainBatchV1KHeadBatched(examples, weights, false, 0.08);
- * console.log(`Loss: ${result.loss}, Accuracy: ${result.accuracy}`);
+ * // Score nodes
+ * const scores = shgat.score(intentEmbedding, ["cap-1"]);
+ *
+ * // Train
+ * const metrics = await shgat.trainBatch(examples);
+ *
+ * // Cleanup
+ * shgat.dispose();
+ * ```
+ *
+ * @example Legacy: createSHGAT (inference only)
+ * ```typescript
+ * import { createSHGAT, type Node } from "@casys/shgat-tf";
+ *
+ * const nodes: Node[] = [
+ *   { id: "tool-a", embedding: toolAEmb, children: [], level: 0 },
+ *   { id: "cap-1",  embedding: capEmb,   children: ["tool-a", "tool-b"], level: 0 },
+ * ];
+ * const shgat = createSHGAT(nodes);
+ * const scores = shgat.scoreNodes(intentEmbedding, 1);
  * ```
  *
  * @module shgat-tf
  */
 
-// Main SHGAT class and factory functions
+// ============================================================================
+// Recommended API: Builder + Ports
+// ============================================================================
+
+// Builder (fluent API for constructing SHGAT instances)
+export { SHGATBuilder } from "./src/core/builder.ts";
+
+// Port interfaces (for dependency injection / hexagonal architecture)
+export type {
+  SHGATScorer,
+  SHGATTrainer,
+  SHGATTrainerScorer,
+  NodeInput,
+  TrainingOptions,
+  ArchitectureOptions,
+} from "./src/core/builder.ts";
+
+// ============================================================================
+// Legacy API (still works, but prefer SHGATBuilder for new code)
+// ============================================================================
+
+// SHGAT class and factory
 export {
   createSHGAT,
-  createSHGATFromCapabilities,
   SHGAT,
-  trainSHGATOnEpisodes,
-  trainSHGATOnEpisodesKHead,
-  trainSHGATOnExecution,
 } from "./src/core/shgat.ts";
 
-// Re-export from shgat.ts (types and utilities)
+// Types and configuration
 export {
   type AttentionResult,
-  type CapabilityNode,
   createDefaultTraceFeatures,
-  DEFAULT_FEATURE_WEIGHTS,
-  DEFAULT_FUSION_WEIGHTS,
   DEFAULT_HYPERGRAPH_FEATURES,
   DEFAULT_SHGAT_CONFIG,
   DEFAULT_TOOL_GRAPH_FEATURES,
   DEFAULT_TRACE_STATS,
-  type FeatureWeights,
   type ForwardCache,
-  type FusionWeights,
-  getAdaptiveConfig,
   type HypergraphFeatures,
   NUM_TRACE_STATS,
   type SHGATConfig,
   type ToolGraphFeatures,
-  type ToolNode,
   type TraceFeatures,
   type TraceStats,
   type TrainingExample,
 } from "./src/core/shgat.ts";
 
+// Legacy types (kept for backward compatibility — prefer Node type)
+export {
+  type CapabilityNode,
+  type ToolNode,
+  type FeatureWeights,
+  type FusionWeights,
+  DEFAULT_FEATURE_WEIGHTS,
+  DEFAULT_FUSION_WEIGHTS,
+  getAdaptiveConfig,
+} from "./src/core/shgat.ts";
+
 // Additional types from types.ts
-export type { BatchedEmbeddings, LevelParams, Member, Node } from "./src/core/types.ts";
+export type { BatchedEmbeddings, LevelParams, Member, Node, SoftTargetExample } from "./src/core/types.ts";
 export {
   batchGetEmbeddings,
   batchGetEmbeddingsByLevel,
@@ -142,33 +185,20 @@ export * as math from "./src/utils/math.ts";
 export { getLogger, resetLogger, setLogger, type Logger } from "./src/core/logger.ts";
 
 // ============================================================================
-// TensorFlow FFI Backend (libtensorflow - no WASM!)
+// TensorFlow.js Backend
 // ============================================================================
 
-// Core FFI bindings
-export * as tff from "./src/tf/tf-ffi.ts";
-
-// High-level API
+// Backend mode selection (training vs inference)
 export {
   initTensorFlow,
+  switchBackend,
+  supportsAutograd,
   getBackend,
   isInitialized,
-  tidy,
-  dispose,
-  tensor,
-  zeros,
-  ones,
-  matMul,
-  softmax,
-  gather,
-  unsortedSegmentSum,
-  Variable,
-  variable,
-  memory,
-  logMemory,
-} from "./src/tf/index.ts";
+  type BackendMode,
+} from "./src/tf/backend.ts";
 
-// Layers Trainer (tf.layers.* + model.trainOnBatch - recommended!)
+// Layers Trainer (alternative: tf.layers.* + model.trainOnBatch)
 export {
   LayersTrainer,
   initLayersTrainer,
@@ -176,9 +206,3 @@ export {
   type LayersTrainerConfig,
   type LayersTrainingMetrics,
 } from "./src/training/layers-trainer.ts";
-
-// Custom kernel for UnsortedSegmentSum (enables gather gradients on WASM)
-export {
-  registerUnsortedSegmentSumKernel,
-  isRegistered as isUnsortedSegmentSumRegistered,
-} from "./src/tf/kernels/unsorted-segment-sum.ts";

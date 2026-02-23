@@ -61,8 +61,8 @@ import {
 // Forward pass helpers (extracted)
 import {
   forwardCore,
-  buildToolToCapMatrix,
-  buildCapToCapMatrices,
+  buildL0ToL1Matrix,
+  buildInterLevelMatrices,
   type ForwardPassContext,
 } from "./forward-helpers.ts";
 
@@ -137,9 +137,7 @@ import {
   type TrainingExample,
 } from "./types.ts";
 
-// Auto-initialize BLAS acceleration on module load
-import { initBlasAcceleration } from "../utils/math.ts";
-await initBlasAcceleration();
+// TF.js backend is auto-initialized on import via ../tf/backend.ts
 
 const log = getLogger();
 
@@ -506,8 +504,8 @@ export class SHGAT {
         hierarchy: this.hierarchy,
         multiLevelIncidence: this.multiLevelIncidence,
       };
-      const toolToCapMatrix_array = buildToolToCapMatrix(ctx);
-      const capToCapMatrices_array = buildCapToCapMatrices(ctx);
+      const toolToCapMatrix_array = buildL0ToL1Matrix(ctx);
+      const capToCapMatrices_array = buildInterLevelMatrices(ctx);
 
       // Convert to tensors
       const H = tf.tensor2d(H_array);
@@ -827,10 +825,4 @@ export class SHGAT {
 // Factory Functions (re-exported from factory.ts)
 // ============================================================================
 
-export {
-  createSHGAT,
-  createSHGATFromCapabilities,
-  trainSHGATOnEpisodes,
-  trainSHGATOnEpisodesKHead,
-  trainSHGATOnExecution,
-} from "./factory.ts";
+export { createSHGAT } from "./factory.ts";

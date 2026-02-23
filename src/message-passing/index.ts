@@ -7,7 +7,17 @@
  * @module graphrag/algorithms/shgat/message-passing
  */
 
-export type { MessagePassingPhase, PhaseParameters, PhaseResult } from "./phase-interface.ts";
+export type {
+  MessagePassingPhase,
+  PhaseForwardCache,
+  PhaseGradients,
+  PhaseParameters,
+  PhaseResult,
+  PhaseResultWithCache,
+  SparseConnectivity,
+} from "./phase-interface.ts";
+export { denseToSparse, edgeKey, transposeSparse } from "./phase-interface.ts";
+export { phaseBackward, phaseForward } from "./phase-shared.ts";
 export { VertexToEdgePhase } from "./vertex-to-edge-phase.ts";
 export { EdgeToVertexPhase } from "./edge-to-vertex-phase.ts";
 export { EdgeToEdgePhase } from "./edge-to-edge-phase.ts";
@@ -23,9 +33,11 @@ export {
 
 // V→V co-occurrence phase
 export {
-  DEFAULT_V2V_PARAMS,
-  VertexToVertexPhase,
+  buildCooccurrenceFromWorkflows,
   buildCooccurrenceMatrix,
+  DEFAULT_V2V_PARAMS,
+  v2vEnrich,
+  VertexToVertexPhase,
 } from "./vertex-to-vertex-phase.ts";
 export type {
   CooccurrenceEntry,

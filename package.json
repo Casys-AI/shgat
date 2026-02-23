@@ -1,0 +1,13 @@
+{
+  "name": "@casys/shgat",
+  "version": "0.1.0",
+  "description": "SuperHyperGraph Attention Networks with TensorFlow.js",
+  "type": "module",
+  "main": "mod.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Casys AI",
+  "license": "MIT"
+}

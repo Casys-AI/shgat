@@ -4,10 +4,10 @@
  * Multi-level message passing for n-SuperHyperGraph structures.
  *
  * Phases:
- * - V→V: Tool-to-tool co-occurrence (from scraped patterns)
- * - V→E: Tools → Capabilities
- * - E→E: Capabilities → Higher-level capabilities
- * - E→V: Capabilities → Tools (backward pass)
+ * - V→V: L0 node co-occurrence (from scraped workflow patterns)
+ * - V→E: L0 nodes → L1 nodes (vertex-to-edge)
+ * - E→E: L1+ nodes → higher-level nodes (edge-to-edge)
+ * - E→V: L1 nodes → L0 nodes (edge-to-vertex)
  *
  * @module graphrag/algorithms/shgat/message-passing
  */
@@ -18,12 +18,17 @@ export type {
   MultiLevelOrchestrator as MultiLevelOrchestratorInterface,
   PhaseParameters,
   PhaseResult,
+  SparseConnectivity,
 } from "./phase-interface.ts";
+
+export { denseToSparse, transposeSparse } from "./phase-interface.ts";
 
 // V→V phase (co-occurrence enrichment)
 export {
+  buildCooccurrenceFromWorkflows,
   buildCooccurrenceMatrix,
   DEFAULT_V2V_CONFIG,
+  v2vEnrich,
   VertexToVertexPhase,
 } from "./vertex-to-vertex-phase.ts";
 export type {
@@ -31,14 +36,6 @@ export type {
   VertexToVertexConfig,
   VertexToVertexResult,
 } from "./vertex-to-vertex-phase.ts";
-
-// Co-occurrence loader
-export {
-  getToolEmbeddings,
-  loadCooccurrenceData,
-  mergeEmbeddings,
-} from "./cooccurrence-loader.ts";
-export type { CooccurrenceData, LoaderOptions } from "./cooccurrence-loader.ts";
 
 // V→E phase
 export { VertexToEdgePhase } from "./vertex-to-edge-phase.ts";
@@ -51,4 +48,8 @@ export { EdgeToEdgePhase } from "./edge-to-edge-phase.ts";
 
 // Orchestrator
 export { MultiLevelOrchestrator } from "./multi-level-orchestrator.ts";
-export type { ForwardCache, LayerParameters, OrchestratorConfig } from "./multi-level-orchestrator.ts";
+export type {
+  ForwardCache,
+  LayerParameters,
+  OrchestratorConfig,
+} from "./multi-level-orchestrator.ts";

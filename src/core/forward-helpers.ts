@@ -59,12 +59,12 @@ export interface ResidualCache {
 // ==========================================================================
 
 /**
- * Build tool → capability incidence matrix from MultiLevelIncidence
+ * Build L0 → L1 incidence matrix from MultiLevelIncidence
  *
- * Returns matrix A[tool_idx][cap_idx] = 1 if tool is directly in capability
+ * Returns matrix A[l0_idx][l1_idx] = 1 if L0 node is directly in L1 node
  * Only for level-0 mappings (no transitive closure)
  */
-export function buildToolToCapMatrix(ctx: ForwardContext): number[][] {
+export function buildL0ToL1Matrix(ctx: ForwardContext): number[][] {
   const numTools = ctx.graphBuilder.getToolCount();
   const capsAtLevel0 = ctx.hierarchy?.hierarchyLevels.get(0) ?? new Set<string>();
   const numCapsLevel0 = capsAtLevel0.size;
@@ -96,11 +96,11 @@ export function buildToolToCapMatrix(ctx: ForwardContext): number[][] {
 }
 
 /**
- * Build capability → capability incidence matrices for each level
+ * Build inter-level incidence matrices for each hierarchy level
  *
  * For level k: matrix A[child_idx][parent_idx] = 1 if child is directly in parent
  */
-export function buildCapToCapMatrices(ctx: ForwardContext): Map<number, number[][]> {
+export function buildInterLevelMatrices(ctx: ForwardContext): Map<number, number[][]> {
   const matrices = new Map<number, number[][]>();
   if (!ctx.hierarchy || !ctx.multiLevelIncidence) return matrices;
 
@@ -343,15 +343,15 @@ export function forwardCore(
   }
 
   // Build incidence matrices
-  const toolToCapMatrix = buildToolToCapMatrix(ctx);
-  const capToCapMatrices = buildCapToCapMatrices(ctx);
+  const l0ToL1Matrix = buildL0ToL1Matrix(ctx);
+  const interLevelMatrices = buildInterLevelMatrices(ctx);
 
   // Execute multi-level forward pass
   const { result, cache: multiCache } = ctx.orchestrator.forwardMultiLevel(
     H_init,
     E_levels_init,
-    toolToCapMatrix,
-    capToCapMatrices,
+    l0ToL1Matrix,
+    interLevelMatrices,
     ctx.levelParams,
     {
       numHeads: ctx.config.numHeads,

@@ -10,19 +10,31 @@
  */
 
 import { assertEquals, assertExists } from "@std/assert";
-import { createSHGATFromCapabilities } from "../mod.ts";
+import { createSHGAT, generateDefaultToolEmbedding, type Node } from "../mod.ts";
 
 // =============================================================================
 // Test Fixtures
 // =============================================================================
 
-function createTestCapabilities(count: number = 3) {
-  return Array.from({ length: count }, (_, i) => ({
-    id: `cap-${i + 1}`,
-    embedding: Array.from({ length: 1024 }, () => Math.random() * 0.1),
-    toolsUsed: [`tool-${i + 1}`],
-    successRate: 0.8,
-  }));
+function createTestNodes(count: number = 3): Node[] {
+  const nodes: Node[] = [];
+  for (let i = 0; i < count; i++) {
+    // Tool node (leaf)
+    nodes.push({
+      id: `tool-${i + 1}`,
+      embedding: generateDefaultToolEmbedding(`tool-${i + 1}`, 1024),
+      children: [],
+      level: 0,
+    });
+    // Capability node (composite)
+    nodes.push({
+      id: `cap-${i + 1}`,
+      embedding: Array.from({ length: 1024 }, () => Math.random() * 0.1),
+      children: [`tool-${i + 1}`],
+      level: 0, // buildGraph will compute actual level
+    });
+  }
+  return nodes;
 }
 
 // =============================================================================
@@ -30,8 +42,8 @@ function createTestCapabilities(count: number = 3) {
 // =============================================================================
 
 Deno.test("Persistence - exportParams returns object", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+  const nodes = createTestNodes(3);
+  const shgat = createSHGAT(nodes);
 
   const params = shgat.exportParams();
 
@@ -40,8 +52,8 @@ Deno.test("Persistence - exportParams returns object", () => {
 });
 
 Deno.test("Persistence - exportParams is JSON serializable", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+  const nodes = createTestNodes(3);
+  const shgat = createSHGAT(nodes);
 
   const params = shgat.exportParams();
   const json = JSON.stringify(params);
@@ -55,8 +67,8 @@ Deno.test("Persistence - exportParams is JSON serializable", () => {
 });
 
 Deno.test("Persistence - exportParams includes required keys", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+  const nodes = createTestNodes(3);
+  const shgat = createSHGAT(nodes);
 
   const params = shgat.exportParams();
 
@@ -70,16 +82,16 @@ Deno.test("Persistence - exportParams includes required keys", () => {
 // =============================================================================
 
 Deno.test("Persistence - importParams restores weights", () => {
-  const caps = createTestCapabilities(3);
+  const nodes = createTestNodes(3);
 
   // Create first SHGAT
-  const shgat1 = createSHGATFromCapabilities(caps);
+  const shgat1 = createSHGAT(nodes);
 
   // Export params
   const params = shgat1.exportParams();
 
   // Create fresh SHGAT and import
-  const shgat2 = createSHGATFromCapabilities(caps);
+  const shgat2 = createSHGAT(nodes);
   shgat2.importParams(params);
 
   // Export from second should match
@@ -93,23 +105,23 @@ Deno.test("Persistence - importParams restores weights", () => {
 });
 
 Deno.test("Persistence - imported model produces same scores", () => {
-  const caps = createTestCapabilities(3);
+  const nodes = createTestNodes(3);
   // Use deterministic intent
   const intent = Array.from({ length: 1024 }, (_, i) => Math.sin(i * 0.01) * 0.1);
 
   // Create first SHGAT
-  const shgat1 = createSHGATFromCapabilities(caps);
+  const shgat1 = createSHGAT(nodes);
 
   // Get scores from original model
-  const scores1 = shgat1.scoreAllCapabilities(intent, []);
+  const scores1 = shgat1.scoreNodes(intent, 1); // composites only
 
   // Export and import to new model
   const params = shgat1.exportParams();
-  const shgat2 = createSHGATFromCapabilities(caps);
+  const shgat2 = createSHGAT(nodes);
   shgat2.importParams(params);
 
   // Get scores from imported model
-  const scores2 = shgat2.scoreAllCapabilities(intent, []);
+  const scores2 = shgat2.scoreNodes(intent, 1);
 
   // Scores should be same length
   assertEquals(scores1.length, scores2.length);
@@ -119,7 +131,7 @@ Deno.test("Persistence - imported model produces same scores", () => {
     assertEquals(
       scores1[i].score.toFixed(6),
       scores2[i].score.toFixed(6),
-      `Score for ${scores1[i].capabilityId} should match`,
+      `Score for ${scores1[i].nodeId} should match`,
     );
   }
 });
@@ -129,15 +141,15 @@ Deno.test("Persistence - imported model produces same scores", () => {
 // =============================================================================
 
 Deno.test("Persistence - JSON round-trip preserves params", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+  const nodes = createTestNodes(3);
+  const shgat = createSHGAT(nodes);
 
-  // Export → JSON → Parse → Import
+  // Export -> JSON -> Parse -> Import
   const exported = shgat.exportParams();
   const json = JSON.stringify(exported);
   const parsed = JSON.parse(json);
 
-  const shgat2 = createSHGATFromCapabilities(caps);
+  const shgat2 = createSHGAT(nodes);
   shgat2.importParams(parsed);
 
   // Verify
@@ -150,8 +162,8 @@ Deno.test("Persistence - JSON round-trip preserves params", () => {
 });
 
 Deno.test("Persistence - multiple round-trips preserve params", () => {
-  const caps = createTestCapabilities(3);
-  const shgat = createSHGATFromCapabilities(caps);
+  const nodes = createTestNodes(3);
+  const shgat = createSHGAT(nodes);
 
   let params = shgat.exportParams();
   const originalJson = JSON.stringify(params);
@@ -161,7 +173,7 @@ Deno.test("Persistence - multiple round-trips preserve params", () => {
     const json = JSON.stringify(params);
     params = JSON.parse(json);
 
-    const newShgat = createSHGATFromCapabilities(caps);
+    const newShgat = createSHGAT(nodes);
     newShgat.importParams(params);
     params = newShgat.exportParams();
   }
@@ -183,10 +195,10 @@ Deno.test("Persistence - multiple round-trips preserve params", () => {
 // =============================================================================
 
 Deno.test("Persistence - simulated file storage", () => {
-  const caps = createTestCapabilities(3);
+  const nodes = createTestNodes(3);
 
   // Create and get params
-  const shgat1 = createSHGATFromCapabilities(caps);
+  const shgat1 = createSHGAT(nodes);
   const params = shgat1.exportParams();
 
   // Simulate file save/load
@@ -194,7 +206,7 @@ Deno.test("Persistence - simulated file storage", () => {
   const loaded = JSON.parse(fileContent);
 
   // Restore to same instance
-  const shgat2 = createSHGATFromCapabilities(caps);
+  const shgat2 = createSHGAT(nodes);
   shgat2.importParams(loaded);
 
   // Verify params were imported
@@ -207,15 +219,15 @@ Deno.test("Persistence - simulated file storage", () => {
 
   // Verify model is usable
   const intent = Array.from({ length: 1024 }, (_, i) => Math.cos(i * 0.02) * 0.1);
-  const scores = shgat2.scoreAllCapabilities(intent, []);
-  assertEquals(scores.length, caps.length, "Should return scores for all capabilities");
+  const scores = shgat2.scoreNodes(intent, 1);
+  assertEquals(scores.length, 3, "Should return scores for all composites");
 });
 
 Deno.test("Persistence - simulated database storage", () => {
-  const caps = createTestCapabilities(3);
+  const nodes = createTestNodes(3);
 
   // Create and get params
-  const shgat1 = createSHGATFromCapabilities(caps);
+  const shgat1 = createSHGAT(nodes);
   const params = shgat1.exportParams();
 
   // Simulate database storage (often stores as string)
@@ -227,7 +239,7 @@ Deno.test("Persistence - simulated database storage", () => {
 
   // Restore from "database"
   const loadedParams = JSON.parse(dbRecord.params);
-  const shgat2 = createSHGATFromCapabilities(caps);
+  const shgat2 = createSHGAT(nodes);
   shgat2.importParams(loadedParams);
 
   // Verify params were imported
@@ -240,6 +252,6 @@ Deno.test("Persistence - simulated database storage", () => {
 
   // Verify model is usable
   const intent = Array.from({ length: 1024 }, (_, i) => Math.sin(i * 0.03) * 0.1);
-  const scores = shgat2.scoreAllCapabilities(intent, []);
-  assertEquals(scores.length, caps.length, "Should return scores for all capabilities");
+  const scores = shgat2.scoreNodes(intent, 1);
+  assertEquals(scores.length, 3, "Should return scores for all composites");
 });

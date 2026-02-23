@@ -1,0 +1,26 @@
+{
+  "name": "@casys/shgat-tf-benchmark",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ToolRet benchmark for SHGAT-TF (Option A: orthogonal projection, no training)",
+  "type": "module",
+  "scripts": {
+    "download": "cd .. && cd .. && cd .. && python3 lib/shgat-tf/benchmark/scripts/download-toolret.py --output-dir lib/shgat-tf/benchmark/data",
+    "embed": "cd .. && cd .. && cd .. && deno run --allow-all --config deno.json lib/shgat-tf/benchmark/scripts/embed-toolret.ts",
+    "prepare-data": "npm run download && npm run embed",
+    "build-shgat": "cd .. && ./scripts/build-node.sh",
+    "bench": "tsx src/run.ts",
+    "bench:synthetic": "tsx src/run.ts --synthetic",
+    "bench:cosine-only": "tsx src/run.ts --cosine-only"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs-node": "^4.22.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

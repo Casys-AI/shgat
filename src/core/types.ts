@@ -337,7 +337,7 @@ export const DEFAULT_SHGAT_CONFIG: SHGATConfig = {
 
 /**
  * @deprecated Use getAdaptiveHeadsByGraphSize() from initialization/parameters.ts instead.
- * That function is now called automatically in createSHGATFromCapabilities().
+ * That function is now called automatically in createSHGAT().
  *
  * This function was based on trace count, but graph size is available at init time
  * while trace count requires async DB query and changes over time.
@@ -384,6 +384,20 @@ export interface TrainingExample {
    * - else: sample from middle third (medium negatives)
    */
   allNegativesSorted?: string[];
+}
+
+/**
+ * Training example with soft target distribution (KL divergence).
+ * Used for n8n data augmentation alongside InfoNCE examples.
+ *
+ * No hard positive/negative labels — the soft distribution IS the target.
+ * K-heads learn to reproduce and surpass raw cosine similarity.
+ */
+export interface SoftTargetExample {
+  /** Intent embedding (1024-dim BGE-M3) — workflow description embedding */
+  intentEmbedding: number[];
+  /** Sparse soft target distribution: [[toolIndex, probability], ...] (top-K, re-normalized) */
+  softTargetSparse: [number, number][];
 }
 
 // ============================================================================
@@ -860,13 +874,13 @@ export interface AttentionResult {
  * Cached activations for backpropagation
  */
 export interface ForwardCache {
-  /** Vertex (tool) embeddings at each layer */
+  /** L0 node embeddings at each layer */
   H: number[][][];
-  /** Hyperedge (capability) embeddings at each layer */
+  /** L1+ node embeddings at each layer */
   E: number[][][];
-  /** Attention weights vertex→edge [layer][head][vertex][edge] */
+  /** Attention weights L0→L1+ [layer][head][L0][L1+] */
   attentionVE: number[][][][];
-  /** Attention weights edge→vertex [layer][head][edge][vertex] */
+  /** Attention weights L1+→L0 [layer][head][L1+][L0] */
   attentionEV: number[][][][];
 }
 
@@ -878,18 +892,18 @@ export interface ForwardCache {
  * Multi-level embeddings structure for n-SuperHyperGraph
  *
  * After forward pass, contains:
- * - H: Final tool embeddings (V, level -1)
- * - E: Capability embeddings per hierarchy level (E^0, E^1, ..., E^L_max)
+ * - H: Final L0 node embeddings (V)
+ * - E: Higher-level node embeddings per hierarchy level (E^0, E^1, ..., E^L_max)
  * - Attention weights for interpretability
  *
  * @since v1 refactor
  * @see 04-message-passing.md
  */
 export interface MultiLevelEmbeddings {
-  /** Tool embeddings (level -1) [numTools][embeddingDim] */
+  /** L0 node embeddings [numL0][embeddingDim] */
   H: number[][];
 
-  /** Capability embeddings by level (E^0, E^1, ..., E^L_max) */
+  /** Higher-level node embeddings by level (E^0, E^1, ..., E^L_max) */
   E: Map<number, number[][]>;
 
   /** Attention weights for upward pass: level → [head][child][parent] */
@@ -913,14 +927,14 @@ export interface LevelParams {
   /**
    * Child projection matrices per head [numHeads][headDim][embeddingDim]
    *
-   * Projects child embeddings (tools or lower-level caps) for attention.
+   * Projects child embeddings (L0 nodes or lower-level nodes) for attention.
    */
   W_child: number[][][];
 
   /**
    * Parent projection matrices per head [numHeads][headDim][embeddingDim]
    *
-   * Projects parent embeddings (higher-level caps) for attention.
+   * Projects parent embeddings (higher-level nodes) for attention.
    */
   W_parent: number[][][];
 
@@ -947,22 +961,22 @@ export interface LevelParams {
  * @since v1 refactor
  */
 export interface MultiLevelForwardCache {
-  /** Initial tool embeddings [numTools][embDim] */
+  /** Initial L0 node embeddings [numL0][embDim] */
   H_init: number[][];
 
-  /** Final tool embeddings after downward pass [numTools][embDim] */
+  /** Final L0 node embeddings after downward pass [numL0][embDim] */
   H_final: number[][];
 
-  /** Capability embeddings per level: level → [numCapsAtLevel][embDim] */
+  /** L1+ node embeddings per level: level → [numNodesAtLevel][embDim] */
   E_init: Map<number, number[][]>;
 
-  /** Final capability embeddings per level after forward pass */
+  /** Final L1+ node embeddings per level after forward pass */
   E_final: Map<number, number[][]>;
 
-  /** Intermediate upward embeddings: level → [numCapsAtLevel][embDim] */
+  /** Intermediate upward embeddings: level → [numNodesAtLevel][embDim] */
   intermediateUpward: Map<number, number[][]>;
 
-  /** Intermediate downward embeddings: level → [numCapsAtLevel][embDim] */
+  /** Intermediate downward embeddings: level → [numNodesAtLevel][embDim] */
   intermediateDownward: Map<number, number[][]>;
 
   /** Attention weights upward: level → [head][child][parent] */

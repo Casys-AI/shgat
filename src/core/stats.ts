@@ -23,8 +23,8 @@ export interface SHGATStats {
   numLayers: number;
   paramCount: number;
   v2ParamCount: number;
-  registeredCapabilities: number;
-  registeredTools: number;
+  registeredL1Nodes: number;
+  registeredL0Nodes: number;
   incidenceNonZeros: number;
   fusionWeights: { semantic: number; structure: number; temporal: number };
   mlpHiddenDim: number;
@@ -64,8 +64,8 @@ export function computeStats(ctx: StatsContext): SHGATStats {
     numLayers: ctx.config.numLayers,
     paramCount: v1ParamCount,
     v2ParamCount,
-    registeredCapabilities: incidenceStats.numCapabilities,
-    registeredTools: incidenceStats.numTools,
+    registeredL1Nodes: incidenceStats.numCapabilities,
+    registeredL0Nodes: incidenceStats.numTools,
     incidenceNonZeros: incidenceStats.nonZeros,
     fusionWeights: ctx.getFusionWeights(),
     mlpHiddenDim: ctx.config.mlpHiddenDim,

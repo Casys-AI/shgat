@@ -317,12 +317,13 @@ export function glorotUniform(shape: number[]): tf.Tensor {
 
 /**
  * Xavier/Glorot normal initialization
+ * @param seed - Optional seed for deterministic initialization
  */
-export function glorotNormal(shape: number[]): tf.Tensor {
+export function glorotNormal(shape: number[], seed?: number): tf.Tensor {
   const fanIn = shape.length > 1 ? shape[shape.length - 2] : shape[0];
   const fanOut = shape[shape.length - 1];
   const stddev = Math.sqrt(2 / (fanIn + fanOut));
-  return tf.randomNormal(shape, 0, stddev);
+  return tf.randomNormal(shape, 0, stddev, "float32", seed);
 }
 
 /**
