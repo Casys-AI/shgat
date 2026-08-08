@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "shgat: SHGAT-TF — SuperHyperGraph Attention Networks for tool relevance scoring. Multi-level message passing on hypergraph hierarchies with K-head attention."
+authors:
+  - family-names: Pesle
+    given-names: Erwan Lee
+year: 2026
+license: AGPL-3.0-only
+repository-code: https://github.com/Casys-AI/shgat
+type: software
